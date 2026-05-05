@@ -4,6 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ventas & Inventario — Don Guillermo</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%232563eb'/><text x='50' y='68' font-family='Arial Black,sans-serif' font-size='44' font-weight='900' fill='white' text-anchor='middle'>DG</text></svg>">
+<meta name="theme-color" content="#2563eb">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Don Guillermo">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -3477,21 +3484,65 @@ async function intentarLogin() {
   const err  = document.getElementById('login-error');
   const btn  = document.querySelector('.login-btn');
 
+  if (!user || !pass) {
+    err.textContent = 'Ingresa tu usuario y contraseña';
+    err.classList.add('show');
+    return;
+  }
+
   // Bloquear botón y mostrar estado mientras sincroniza
   err.classList.remove('show');
   btn.disabled = true;
   btn.textContent = '🔄 Verificando...';
 
-  // 1. Sincronizar con Supabase ANTES de validar
+  // 1. Intentar validar directamente contra Supabase (fuente de verdad)
   let supaOk = false;
+  let u = null;
+
   try {
-    supaOk = await syncFromSupabase();
+    // Buscar usuario directamente en Supabase por usuario y clave
+    const { data: supaUsers, error: supaErr } = await supa
+      .from('usuarios')
+      .select('*')
+      .eq('usuario', user)
+      .eq('activo', true);
+
+    if (!supaErr && supaUsers?.length) {
+      // Verificar clave (puede ser texto plano en la tabla)
+      const match = supaUsers.find(x => x.clave === pass);
+      if (match) {
+        // Sincronizar todo en background
+        syncFromSupabase().catch(() => {});
+        supaOk = true;
+        // Construir objeto usuario local
+        u = {
+          id: 'U' + String(match.id).padStart(3,'0'),
+          nombre: match.nombre,
+          usuario: match.usuario,
+          clave: match.clave,
+          rol: match.rol,
+          activo: match.activo,
+          ultimoAcceso: match.ultimo_acceso,
+          _dbid: match.id
+        };
+      }
+    } else if (supaErr) {
+      // Supabase inaccesible → fallback a localStorage
+      console.warn('Supabase no disponible, usando caché local:', supaErr.message);
+      supaOk = false;
+    }
   } catch(e) {
-    // Sin conexión: continuamos con localStorage
+    console.warn('Error de red con Supabase, usando localStorage:', e.message);
+    supaOk = false;
   }
 
-  // 2. Validar con los datos ya actualizados (o los locales si no hubo conexión)
-  const u = getUsuarios().find(x => x.usuario === user && x.clave === pass && x.activo);
+  // 2. Si Supabase falló o no encontró, intentar con datos locales cacheados
+  if (!u) {
+    const localUsers = getUsuarios();
+    if (localUsers.length) {
+      u = localUsers.find(x => x.usuario === user && x.clave === pass && x.activo);
+    }
+  }
 
   // Restaurar botón
   btn.disabled = false;
@@ -3534,6 +3585,9 @@ async function intentarLogin() {
     // Modo Visita: ocultar botones de acción
     if (u.rol === 'Visita') activarModoVisita();
   } else {
+    err.textContent = supaOk
+      ? 'Usuario o contraseña incorrectos'
+      : 'Usuario o contraseña incorrectos (modo offline)';
     err.classList.add('show');
     document.getElementById('login-pass').value = '';
     document.getElementById('login-pass').focus();
