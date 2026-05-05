@@ -295,6 +295,221 @@ th.sort-desc::after{content:' ↓';opacity:1;color:var(--accent);}
 .login-error.show{display:block;}
 .login-footer{font-size:11px;color:#8890b0;margin-top:24px;}
 </style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+// ══ SUPABASE CONFIG ══════════════════════════════════
+const SUPA_URL = 'https://wlwjzarnsgzgtdskaglt.supabase.co';
+const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Indsd2p6YXJuc2d6Z3Rkc2thZ2x0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc5MDMyMzQsImV4cCI6MjA5MzQ3OTIzNH0.V1bmOZBqRvDGnf4Hv3UBczx1Hcwn-COOVjjACz7jbZE';
+const supa = supabase.createClient(SUPA_URL, SUPA_KEY);
+
+// ══ SYNC HELPERS ═════════════════════════════════════
+// Lee desde Supabase y cachea en localStorage
+async function syncFromSupabase() {
+  try {
+    const [pr, cl, mo, ve, pv, co, us, ac] = await Promise.all([
+      supa.from('productos').select('*'),
+      supa.from('clientes').select('*'),
+      supa.from('movimientos').select('*').order('creado_en', {ascending:false}),
+      supa.from('ventas').select('*, venta_items(*)').order('creado_en', {ascending:false}),
+      supa.from('proveedores').select('*'),
+      supa.from('comunas').select('*'),
+      supa.from('usuarios').select('*'),
+      supa.from('accesos').select('*').order('creado_en', {ascending:false}).limit(200),
+    ]);
+
+    if (pr.data?.length) {
+      const prods = pr.data.map(p => ({
+        id: 'P'+String(p.id).padStart(3,'0'),
+        sku: p.sku || 'SKU-'+String(p.id).padStart(3,'0'),
+        nombre: p.nombre, cat: p.categoria, prov: p.proveedor,
+        ubic: p.ubicacion, pc: p.precio_compra, pv2: p.precio_venta,
+        pv: p.precio_venta, stockIni: p.stock_inicial,
+        smin: p.stock_minimo, smax: p.stock_maximo,
+        unidad: p.unidad, peso: p.peso, descripcion: p.descripcion,
+        _dbid: p.id
+      }));
+      localStorage.setItem('dg_productos', JSON.stringify(prods));
+    }
+
+    if (cl.data?.length) {
+      const clientes = cl.data.map(c => ({
+        nombre: c.nombre, celular: c.celular,
+        direccion: c.direccion, comuna: c.comuna, _dbid: c.id
+      }));
+      localStorage.setItem('dg_clientes', JSON.stringify(clientes));
+    }
+
+    if (mo.data?.length) {
+      const movs = mo.data.map(m => ({
+        id: m.id, fecha: m.fecha, semana: m.semana_iso,
+        nombre: m.producto_nombre, tipo: m.tipo,
+        cant: m.cantidad, precio: m.precio_unit, total: m.total,
+        proveedor: m.proveedor, ticket: m.numero_ticket,
+        cliente: m.cliente_nombre, nota: m.nota
+      }));
+      localStorage.setItem('dg_movimientos', JSON.stringify(movs));
+    }
+
+    if (ve.data?.length) {
+      const ventas = ve.data.map(v => ({
+        id: v.numero_ticket, fecha: v.fecha, semana: v.semana_iso,
+        cliente: { nombre: v.cliente_nombre, celular: v.cliente_celular },
+        items: (v.venta_items||[]).map(i => ({
+          nombre: i.producto_nombre, cant: i.cantidad,
+          precio: i.precio_unit, total: i.total
+        })),
+        total: v.total, pagado: v.pagado,
+        anulada: v.anulada, fechaAnulacion: v.fecha_anulacion,
+        _dbid: v.id
+      }));
+      localStorage.setItem('dg_ventas', JSON.stringify(ventas));
+    }
+
+    if (pv.data?.length) {
+      const provs = pv.data.map(p => ({
+        id: 'PR'+String(p.id).padStart(3,'0'),
+        nombre: p.nombre, contacto: p.contacto,
+        celular: p.celular, correo: p.correo,
+        direccion: p.direccion, comuna: p.comuna, notas: p.notas,
+        _dbid: p.id
+      }));
+      localStorage.setItem('dg_proveedores', JSON.stringify(provs));
+    }
+
+    if (co.data?.length) {
+      const comunas = co.data.map(c => ({
+        id: 'C'+String(c.id).padStart(3,'0'),
+        nombre: c.nombre, region: c.region, _dbid: c.id
+      }));
+      localStorage.setItem('dg_comunas', JSON.stringify(comunas));
+    }
+
+    if (us.data?.length) {
+      const usuarios = us.data.map(u => ({
+        id: 'U'+String(u.id).padStart(3,'0'),
+        nombre: u.nombre, usuario: u.usuario,
+        clave: u.clave, rol: u.rol, activo: u.activo,
+        ultimoAcceso: u.ultimo_acceso, _dbid: u.id
+      }));
+      localStorage.setItem('dg_usuarios', JSON.stringify(usuarios));
+    }
+
+    if (ac.data?.length) {
+      localStorage.setItem('dg_accesos', JSON.stringify(ac.data));
+    }
+
+    console.log('✅ Datos sincronizados desde Supabase');
+    return true;
+  } catch(e) {
+    console.warn('⚠️ Sin conexión Supabase, usando localStorage:', e.message);
+    return false;
+  }
+}
+
+// Guarda producto en Supabase
+async function saveProductoSupa(prod) {
+  const data = {
+    nombre: prod.nombre, categoria: prod.cat, proveedor: prod.prov,
+    ubicacion: prod.ubic, precio_compra: prod.pc, precio_venta: prod.pv,
+    stock_inicial: prod.stockIni, stock_minimo: prod.smin,
+    stock_maximo: prod.smax, unidad: prod.unidad,
+    peso: prod.peso, descripcion: prod.descripcion
+  };
+  if (prod._dbid) {
+    await supa.from('productos').update(data).eq('id', prod._dbid);
+  } else {
+    const r = await supa.from('productos').insert(data).select().single();
+    return r.data?.id;
+  }
+}
+
+// Guarda cliente en Supabase
+async function saveClienteSupa(cli) {
+  const data = { nombre: cli.nombre, celular: cli.celular, direccion: cli.direccion, comuna: cli.comuna };
+  if (cli._dbid) {
+    await supa.from('clientes').update(data).eq('id', cli._dbid);
+  } else {
+    const r = await supa.from('clientes').insert(data).select().single();
+    return r.data?.id;
+  }
+}
+
+// Guarda venta completa en Supabase
+async function saveVentaSupa(venta) {
+  const vData = {
+    numero_ticket: venta.id, fecha: venta.fecha,
+    semana_iso: venta.semana || semanaISO(venta.fecha),
+    cliente_nombre: venta.cliente?.nombre,
+    cliente_celular: venta.cliente?.celular,
+    total: venta.total, pagado: venta.pagado||false,
+    anulada: venta.anulada||false
+  };
+  const r = await supa.from('ventas').insert(vData).select().single();
+  if (r.data?.id && venta.items?.length) {
+    const items = venta.items.map(it => ({
+      venta_id: r.data.id, producto_nombre: it.nombre,
+      cantidad: it.cant, precio_unit: it.precio, total: it.total
+    }));
+    await supa.from('venta_items').insert(items);
+  }
+}
+
+// Actualiza pagado/anulado en Supabase
+async function updateVentaSupa(ticket, datos) {
+  await supa.from('ventas').update(datos).eq('numero_ticket', ticket);
+}
+
+// Guarda movimiento en Supabase
+async function saveMovimientoSupa(mov) {
+  await supa.from('movimientos').insert({
+    fecha: mov.fecha, semana_iso: mov.semana,
+    producto_nombre: mov.nombre, tipo: mov.tipo,
+    cantidad: mov.cant, precio_unit: mov.precio, total: mov.total,
+    proveedor: mov.proveedor, numero_ticket: mov.ticket,
+    cliente_nombre: mov.cliente, nota: mov.nota
+  });
+}
+
+// Guarda proveedor en Supabase
+async function saveProveedorSupa(prov) {
+  const data = { nombre: prov.nombre, contacto: prov.contacto, celular: prov.celular, correo: prov.correo, direccion: prov.direccion, comuna: prov.comuna, notas: prov.notas };
+  if (prov._dbid) {
+    await supa.from('proveedores').update(data).eq('id', prov._dbid);
+  } else {
+    const r = await supa.from('proveedores').insert(data).select().single();
+    return r.data?.id;
+  }
+}
+
+// Guarda acceso en Supabase
+async function saveAccesoSupa(acc) {
+  await supa.from('accesos').insert({ usuario: acc.usuario, nombre: acc.nombre, rol: acc.rol, fecha: acc.fecha });
+}
+
+// Banner de estado de conexión
+function mostrarEstadoConexion(ok) {
+  let banner = document.getElementById('supa-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'supa-banner';
+    banner.style.cssText = 'position:fixed;bottom:70px;right:24px;padding:6px 14px;border-radius:8px;font-size:11px;font-weight:600;z-index:9998;transition:all .3s';
+    document.body.appendChild(banner);
+  }
+  if (ok) {
+    banner.style.background = 'rgba(5,150,105,.12)';
+    banner.style.color = '#059669';
+    banner.style.border = '1px solid rgba(5,150,105,.3)';
+    banner.textContent = '☁️ Conectado a Supabase';
+  } else {
+    banner.style.background = 'rgba(217,119,6,.12)';
+    banner.style.color = '#d97706';
+    banner.style.border = '1px solid rgba(217,119,6,.3)';
+    banner.textContent = '⚠️ Modo offline — datos locales';
+  }
+  setTimeout(() => { if(banner) banner.style.opacity='0'; }, 4000);
+  setTimeout(() => { if(banner) banner.style.opacity='1'; }, 100);
+}
+</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
@@ -311,7 +526,10 @@ th.sort-desc::after{content:' ↓';opacity:1;color:var(--accent);}
     </div>
     <div class="login-group">
       <label class="login-label">Contraseña</label>
-      <input class="login-input" id="login-pass" type="password" placeholder="••••••••" autocomplete="current-password">
+      <div style="position:relative">
+        <input class="login-input" id="login-pass" type="password" placeholder="••••••••" autocomplete="current-password" style="padding-right:44px">
+        <button type="button" onclick="togglePassVis()" style="position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:18px;color:#8890b0;padding:0;line-height:1" id="btn-eye">👁️</button>
+      </div>
     </div>
     <button class="login-btn" onclick="intentarLogin()">Ingresar al sistema</button>
     <div class="login-error" id="login-error">Usuario o contraseña incorrectos</div>
@@ -1155,6 +1373,7 @@ th.sort-desc::after{content:' ↓';opacity:1;color:var(--accent);}
           <option value="Administrador">👑 Administrador</option>
           <option value="Vendedor">🛒 Vendedor</option>
           <option value="Inventario">📦 Inventario</option>
+          <option value="Visita">👁️ Visita (solo lectura)</option>
         </select>
       </div>
       <div class="form-group">
@@ -1672,6 +1891,7 @@ function confirmarVenta() {
   };
   ventas.unshift(ventaGuardada);
   setVentas(ventas);
+  saveVentaSupa(ventaGuardada).catch(e=>console.warn('Venta no guardada en nube:',e));
 
   showToast(`Venta ${numTicket} confirmada — ${clp(total)}`);
 
@@ -1944,6 +2164,7 @@ function togglePagado(id) {
   if (idx < 0) return;
   ventas[idx].pagado = !ventas[idx].pagado;
   setVentas(ventas);
+  updateVentaSupa(id, {pagado: ventas[idx].pagado}).catch(()=>{});
   renderHistorial();
   showToast(ventas[idx].pagado ? '✅ Marcado como pagado' : '🔴 Marcado como no pagado');
 }
@@ -2090,6 +2311,7 @@ function anularVenta(id) {
     fechaAnulacion: new Date().toLocaleDateString('es-CL', {day:'2-digit', month:'2-digit', year:'numeric'}),
   };
   setVentas(ventas);
+  updateVentaSupa(id, {anulada:true, fecha_anulacion: ventas[idx].fechaAnulacion}).catch(()=>{});
 
   showToast(`Ticket ${id} anulado — stock devuelto (${v.items.length} producto${v.items.length>1?'s':''})`);
   filtrarHistorial(document.querySelector('#page-historial .search-input')?.value || '');
@@ -2431,6 +2653,7 @@ function registrarMovimiento() {
   const movs = getMovimientos();
   movs.unshift({id:Date.now(), fecha, nombre, tipo:'Entrada', proveedor, cant, precio, total:cant*precio, semana:semanaISO(fecha)});
   setMovimientos(movs);
+  saveMovimientoSupa(movs[0]).catch(()=>{});
   document.getElementById('mov-cantidad').value = '';
   document.getElementById('mov-proveedor').value = '';
   showToast(`Entrada registrada — ${nombre} x${cant}`);
@@ -3212,12 +3435,14 @@ const USUARIOS_DEFAULT = [
   { id:'U001', nombre:'Don Guillermo', usuario:'admin',      clave:'guillermo2025', rol:'Administrador', activo:true },
   { id:'U002', nombre:'Vendedor',      usuario:'vendedor',   clave:'venta123',      rol:'Vendedor',      activo:true },
   { id:'U003', nombre:'Inventario',    usuario:'inventario', clave:'stock123',      rol:'Inventario',    activo:true },
+  { id:'U004', nombre:'Visita',        usuario:'visita',     clave:'visita123',     rol:'Visita',        activo:true },
 ];
 
 const ROL_META = {
   'Administrador': { emoji:'👑', color:'#2563eb' },
   'Vendedor':      { emoji:'🛒', color:'#059669' },
   'Inventario':    { emoji:'📦', color:'#d97706' },
+  'Visita':        { emoji:'👁️', color:'#8890b0' },
 };
 
 function getUsuarios() {
@@ -3234,11 +3459,44 @@ function nextUserId() {
 
 let usuarioActual = null;
 
-function intentarLogin() {
+function togglePassVis() {
+  const inp = document.getElementById('login-pass');
+  const btn = document.getElementById('btn-eye');
+  if (inp.type === 'password') {
+    inp.type = 'text';
+    btn.textContent = '🙈';
+  } else {
+    inp.type = 'password';
+    btn.textContent = '👁️';
+  }
+}
+
+async function intentarLogin() {
   const user = document.getElementById('login-user').value.trim().toLowerCase();
   const pass = document.getElementById('login-pass').value;
   const err  = document.getElementById('login-error');
+  const btn  = document.querySelector('.login-btn');
+
+  // Bloquear botón y mostrar estado mientras sincroniza
+  err.classList.remove('show');
+  btn.disabled = true;
+  btn.textContent = '🔄 Verificando...';
+
+  // 1. Sincronizar con Supabase ANTES de validar
+  let supaOk = false;
+  try {
+    supaOk = await syncFromSupabase();
+  } catch(e) {
+    // Sin conexión: continuamos con localStorage
+  }
+
+  // 2. Validar con los datos ya actualizados (o los locales si no hubo conexión)
   const u = getUsuarios().find(x => x.usuario === user && x.clave === pass && x.activo);
+
+  // Restaurar botón
+  btn.disabled = false;
+  btn.textContent = 'Ingresar al sistema';
+
   if (u) {
     usuarioActual = u;
     err.classList.remove('show');
@@ -3259,6 +3517,7 @@ function intentarLogin() {
     accesos.unshift({ usuario: u.usuario, nombre: u.nombre, rol: u.rol, fecha: local });
     // Guardar solo los últimos 200 accesos
     setAccesos(accesos.slice(0, 200));
+    saveAccesoSupa({usuario:u.usuario,nombre:u.nombre,rol:u.rol,fecha:local}).catch(()=>{});
     // Actualizar último acceso en el usuario
     const us = getUsuarios();
     const idx = us.findIndex(x => x.id === u.id);
@@ -3266,16 +3525,65 @@ function intentarLogin() {
 
     navTo('dashboard');
     iniciarWidget();
+    mostrarEstadoConexion(supaOk);
     const btnCS = document.getElementById('btn-cerrar-sesion');
     if (btnCS) btnCS.style.display = '';
     // Mostrar/ocultar menú Usuarios según perfil
     const navU = document.getElementById('nav-usuarios');
     if (navU) navU.style.display = u.rol === 'Administrador' ? '' : 'none';
+    // Modo Visita: ocultar botones de acción
+    if (u.rol === 'Visita') activarModoVisita();
   } else {
     err.classList.add('show');
     document.getElementById('login-pass').value = '';
     document.getElementById('login-pass').focus();
   }
+}
+
+function activarModoVisita() {
+  // Inyectar CSS que oculta todos los botones de acción excepto ver/imprimir
+  const style = document.createElement('style');
+  style.id = 'visita-mode';
+  style.textContent = `
+    /* Modo Visita — ocultar acciones */
+    .btn-primary:not(#btn-cerrar-sesion),
+    .btn-success,
+    .btn-danger,
+    .btn-warn,
+    button[onclick*="abrirModal"],
+    button[onclick*="guardar"],
+    button[onclick*="eliminar"],
+    button[onclick*="registrar"],
+    button[onclick*="confirmar"],
+    button[onclick*="anular"],
+    button[onclick*="toggle"],
+    button[onclick*="reset"],
+    button[onclick*="importar"],
+    button[onclick*="limpiar"],
+    button[onclick*="exportarBackup"],
+    button[onclick*="exportarInventario"],
+    #btn-drive,
+    .price-input,
+    input[type="number"].price-input
+    { display: none !important; }
+    /* Ocultar módulos de escritura del menú */
+    #nav-nueva-venta, #nav-movimientos, #nav-seguridad
+    { display: none !important; }
+  `;
+  document.head.appendChild(style);
+
+  // Ocultar ítems del menú que no aplican a visita
+  ['nueva-venta','movimientos','seguridad'].forEach(id => {
+    const el = document.querySelector(`[onclick*="navTo('${id}')"]`);
+    if (el) el.style.display = 'none';
+  });
+
+  // Banner de modo visita
+  const banner = document.createElement('div');
+  banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#f59e0b;color:#fff;text-align:center;padding:4px;font-size:12px;font-weight:600;z-index:99999;';
+  banner.textContent = '👁️ Modo Visita — Solo lectura';
+  document.body.prepend(banner);
+  document.querySelector('.main').style.marginTop = '24px';
 }
 
 function cerrarSesion() {
