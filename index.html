@@ -493,6 +493,51 @@ async function saveAccesoSupa(acc) {
   await supa.from('accesos').insert({ usuario: acc.usuario, nombre: acc.nombre, rol: acc.rol, fecha: acc.fecha });
 }
 
+// ════════════════════════════════════════════════════════
+// HASH DE CONTRASEÑAS — SHA-256 con salt fijo
+// ════════════════════════════════════════════════════════
+// Usa SubtleCrypto (Web Crypto API, nativo del navegador).
+// El salt fijo previene rainbow tables públicas.
+// Si una clave tiene exactamente 64 caracteres hex, asumimos
+// que ya está hasheada (compatibilidad y prevención de doble hash).
+const PASSWORD_SALT = 'donguillermo_2026_v1_a7f3';
+
+async function hashPassword(pass) {
+  if (!pass) return '';
+  // Si ya es un hash hex de 64 caracteres, devolverlo tal cual
+  if (/^[a-f0-9]{64}$/i.test(pass)) return pass.toLowerCase();
+  const encoder = new TextEncoder();
+  const data = encoder.encode(pass + PASSWORD_SALT);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Guarda usuario en Supabase (crear o actualizar)
+async function saveUsuarioSupa(u) {
+  const data = {
+    nombre: u.nombre,
+    usuario: u.usuario,
+    clave: u.clave,
+    rol: u.rol,
+    activo: u.activo !== false
+  };
+  if (u._dbid) {
+    await supa.from('usuarios').update(data).eq('id', u._dbid);
+    return u._dbid;
+  } else {
+    const r = await supa.from('usuarios').insert(data).select().single();
+    if (r.error) throw new Error(r.error.message);
+    return r.data?.id;
+  }
+}
+
+// Elimina usuario en Supabase
+async function deleteUsuarioSupa(dbid) {
+  if (!dbid) return;
+  await supa.from('usuarios').delete().eq('id', dbid);
+}
+
 // Banner de estado de conexión
 function mostrarEstadoConexion(ok) {
   let banner = document.getElementById('supa-banner');
@@ -3495,12 +3540,15 @@ async function intentarLogin() {
   btn.disabled = true;
   btn.textContent = '🔄 Verificando...';
 
+  // Hashear la contraseña ingresada UNA sola vez para todas las comparaciones
+  const passHash = await hashPassword(pass);
+
   // 1. Intentar validar directamente contra Supabase (fuente de verdad)
   let supaOk = false;
   let u = null;
 
   try {
-    // Buscar usuario directamente en Supabase por usuario y clave
+    // Buscar usuario directamente en Supabase por usuario y clave hasheada
     const { data: supaUsers, error: supaErr } = await supa
       .from('usuarios')
       .select('*')
@@ -3508,8 +3556,8 @@ async function intentarLogin() {
       .eq('activo', true);
 
     if (!supaErr && supaUsers?.length) {
-      // Verificar clave (puede ser texto plano en la tabla)
-      const match = supaUsers.find(x => x.clave === pass);
+      // Comparar el hash de la contraseña ingresada con el hash guardado
+      const match = supaUsers.find(x => x.clave === passHash);
       if (match) {
         // Sincronizar todo en background
         syncFromSupabase().catch(() => {});
@@ -3540,7 +3588,7 @@ async function intentarLogin() {
   if (!u) {
     const localUsers = getUsuarios();
     if (localUsers.length) {
-      u = localUsers.find(x => x.usuario === user && x.clave === pass && x.activo);
+      u = localUsers.find(x => x.usuario === user && x.clave === passHash && x.activo);
     }
   }
 
@@ -4265,7 +4313,7 @@ function editarUsuario(id) {
   document.getElementById('modal-usuario').classList.add('open');
 }
 
-function guardarUsuario() {
+async function guardarUsuario() {
   const nombre  = document.getElementById('u-nombre').value.trim();
   const usuario = document.getElementById('u-usuario').value.trim().toLowerCase();
   const rol     = document.getElementById('u-perfil').value;
@@ -4286,35 +4334,58 @@ function guardarUsuario() {
   const dup = us.find(x => x.usuario === usuario && x.id !== editingUserId);
   if (dup) { showErr(`El usuario "${usuario}" ya existe`); return; }
 
-  if (editingUserId) {
-    // Editar: clave opcional
-    if (clave && clave.length < 6) { showErr('La contraseña debe tener al menos 6 caracteres'); return; }
-    if (clave && clave !== clave2) { showErr('Las contraseñas no coinciden'); return; }
-    const idx = us.findIndex(x => x.id === editingUserId);
-    if (idx >= 0) {
-      us[idx] = { ...us[idx], nombre, usuario, rol, activo };
-      if (clave) us[idx].clave = clave;
+  try {
+    if (editingUserId) {
+      // Editar: clave opcional
+      if (clave && clave.length < 6) { showErr('La contraseña debe tener al menos 6 caracteres'); return; }
+      if (clave && clave !== clave2) { showErr('Las contraseñas no coinciden'); return; }
+      const idx = us.findIndex(x => x.id === editingUserId);
+      if (idx >= 0) {
+        const datosUp = { ...us[idx], nombre, usuario, rol, activo };
+        // Si se ingresó nueva clave, hashearla
+        if (clave) datosUp.clave = await hashPassword(clave);
+        // Subir a Supabase
+        await saveUsuarioSupa(datosUp);
+        us[idx] = datosUp;
+      }
+      showToast('Usuario actualizado');
+    } else {
+      // Nuevo: clave obligatoria
+      if (!clave) { showErr('La contraseña es obligatoria'); return; }
+      if (clave.length < 6) { showErr('La contraseña debe tener al menos 6 caracteres'); return; }
+      if (clave !== clave2) { showErr('Las contraseñas no coinciden'); return; }
+      const claveHash = await hashPassword(clave);
+      const nuevo = { id: nextUserId(), nombre, usuario, rol, activo, clave: claveHash };
+      // Subir a Supabase y capturar el _dbid
+      const dbid = await saveUsuarioSupa(nuevo);
+      if (dbid) nuevo._dbid = dbid;
+      us.push(nuevo);
+      showToast('Usuario creado');
     }
-    showToast('Usuario actualizado');
-  } else {
-    // Nuevo: clave obligatoria
-    if (!clave) { showErr('La contraseña es obligatoria'); return; }
-    if (clave.length < 6) { showErr('La contraseña debe tener al menos 6 caracteres'); return; }
-    if (clave !== clave2) { showErr('Las contraseñas no coinciden'); return; }
-    us.push({ id: nextUserId(), nombre, usuario, rol, activo, clave });
-    showToast('Usuario creado');
+    setUsuarios(us);
+    cerrarModal('modal-usuario');
+    renderUsuarios();
+  } catch(e) {
+    showErr('Error al guardar en la nube: ' + e.message);
+    console.error('saveUsuarioSupa error:', e);
   }
-  setUsuarios(us);
-  cerrarModal('modal-usuario');
-  renderUsuarios();
 }
 
-function eliminarUsuario(id) {
+async function eliminarUsuario(id) {
   if (!confirm('¿Eliminar este usuario? Esta acción no se puede deshacer.')) return;
-  const us = getUsuarios().filter(x => x.id !== id);
-  setUsuarios(us);
-  renderUsuarios();
-  showToast('Usuario eliminado');
+  const us = getUsuarios();
+  const target = us.find(x => x.id === id);
+  try {
+    if (target?._dbid) {
+      await deleteUsuarioSupa(target._dbid);
+    }
+    setUsuarios(us.filter(x => x.id !== id));
+    renderUsuarios();
+    showToast('Usuario eliminado');
+  } catch(e) {
+    showToast('Error al eliminar: ' + e.message, 'err');
+    console.error('deleteUsuarioSupa error:', e);
+  }
 }
 
 // ════════════════════════════════════════════════════════
