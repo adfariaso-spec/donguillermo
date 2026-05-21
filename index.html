@@ -1698,13 +1698,13 @@ const PRODUCTOS_INIT = [
 // ════════════════════════════════════════════════════════
 function getClientes() {
   const d = localStorage.getItem('dg_clientes');
-  return d ? JSON.parse(d) : JSON.parse(JSON.stringify(CLIENTES_INIT));
+  return d ? JSON.parse(d) : [];
 }
 function setClientes(d) { localStorage.setItem('dg_clientes', JSON.stringify(d)); }
 
 function getProductos() {
   const d = localStorage.getItem('dg_productos');
-  return d ? JSON.parse(d) : JSON.parse(JSON.stringify(PRODUCTOS_INIT));
+  return d ? JSON.parse(d) : [];
 }
 function setProductos(d) { localStorage.setItem('dg_productos', JSON.stringify(d)); }
 
@@ -3641,7 +3641,7 @@ const ROL_META = {
 
 function getUsuarios() {
   const d = localStorage.getItem('dg_usuarios');
-  return d ? JSON.parse(d) : JSON.parse(JSON.stringify(USUARIOS_DEFAULT));
+  return d ? JSON.parse(d) : [];
 }
 function setUsuarios(d) { localStorage.setItem('dg_usuarios', JSON.stringify(d)); }
 function nextUserId() {
@@ -4009,7 +4009,7 @@ const COMUNAS_DEFAULT = [
 
 function getComunas() {
   const d = localStorage.getItem('dg_comunas');
-  return d ? JSON.parse(d) : JSON.parse(JSON.stringify(COMUNAS_DEFAULT));
+  return d ? JSON.parse(d) : [];
 }
 function setComunas(d) { localStorage.setItem('dg_comunas', JSON.stringify(d)); }
 function nextComunaId() {
@@ -4038,7 +4038,6 @@ function toggleSortComuna() {
 }
 
 function renderComunas() {
-  if (!localStorage.getItem('dg_comunas')) setComunas(JSON.parse(JSON.stringify(COMUNAS_DEFAULT)));
   filtrarComunas('');
 }
 
