@@ -1117,14 +1117,21 @@ function mostrarEstadoConexion(ok) {
       <div class="table-card">
         <div class="table-header">
           <span class="table-title">Productos registrados</span>
-          <div style="display:flex;gap:10px;align-items:center">
-            <input class="search-input" placeholder="Buscar producto..." oninput="filtrarProductos(this.value)" id="search-prod-mant">
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <input class="search-input" placeholder="Buscar producto..." oninput="filtrarProductos()" id="search-prod-mant" style="width:180px">
+            <select class="form-select" id="filtro-prod-cat" onchange="filtrarProductos()" style="width:auto;min-width:130px">
+              <option value="">Todas las categorías</option>
+            </select>
+            <select class="form-select" id="filtro-prod-bodega" onchange="filtrarProductos()" style="width:auto;min-width:120px">
+              <option value="">Todas las bodegas</option>
+            </select>
+            <button class="btn btn-success" onclick="descargarProductosExcel()">⬇ Excel</button>
             <button class="btn btn-primary" onclick="abrirModalProductoMant()">+ Nuevo producto</button>
           </div>
         </div>
         <table>
           <thead><tr>
-            <th>Código</th><th>Nombre</th><th>Categoría</th><th>Unidad</th>
+            <th>Código</th><th>Nombre</th><th>Categoría</th><th>Bodega</th><th>Unidad</th>
             <th>Peso / Vol.</th><th>Descripción</th><th>P. Compra</th><th>P. Venta</th><th>Acciones</th>
           </tr></thead>
           <tbody id="tabla-productos-mant"></tbody>
@@ -2983,15 +2990,77 @@ function toggleSortCli(col) {
 // ════════════════════════════════════════════════════════
 let editingProdMantId = null;
 
-function renderProductos() { filtrarProductos(''); }
+// Descarga un Excel (CSV) con el listado de productos: nombre, precio venta y bodega.
+// Respeta los filtros activos (categoría / bodega / búsqueda).
+function descargarProductosExcel() {
+  const ql = (document.getElementById('search-prod-mant')?.value || '').toLowerCase();
+  const fCat = document.getElementById('filtro-prod-cat')?.value || '';
+  const fBod = document.getElementById('filtro-prod-bodega')?.value || '';
+  const prods = getProductos().filter(p => {
+    const matchTexto = !ql ||
+      p.nombre.toLowerCase().includes(ql) ||
+      (p.cat||'').toLowerCase().includes(ql) ||
+      (p.descripcion||'').toLowerCase().includes(ql);
+    const matchCat = !fCat || p.cat === fCat;
+    const matchBod = !fBod || p.ubic === fBod;
+    return matchTexto && matchCat && matchBod;
+  }).sort((a,b) => {
+    // Ordenar por categoría y, dentro de cada categoría, por nombre
+    const cmpCat = (a.cat || '').localeCompare(b.cat || '', 'es');
+    return cmpCat !== 0 ? cmpCat : a.nombre.localeCompare(b.nombre, 'es');
+  });
 
-function filtrarProductos(q) {
-  const ql = q.toLowerCase();
-  const prods = getProductos().filter(p =>
-    p.nombre.toLowerCase().includes(ql) ||
-    (p.cat||'').toLowerCase().includes(ql) ||
-    (p.descripcion||'').toLowerCase().includes(ql)
-  );
+  if (!prods.length) { showToast('No hay productos para exportar', 'err'); return; }
+
+  // Escapar campos para CSV (comillas y comas)
+  const esc = v => {
+    const s = String(v == null ? '' : v);
+    return /[",;\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const filas = [['Nombre', 'Categoría', 'Precio Compra', 'Precio Venta', 'Bodega']];
+  prods.forEach(p => filas.push([p.nombre || '', p.cat || '', p.pc || 0, p.pv || 0, p.ubic || '']));
+  // Separador ; (Excel en español lo reconoce mejor) + BOM para acentos
+  const csv = '\uFEFF' + filas.map(f => f.map(esc).join(';')).join('\r\n');
+
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const fecha = fechaHoy();
+  a.href = url;
+  a.download = `productos_${fecha}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast(`${prods.length} productos exportados`);
+}
+
+function renderProductos() {
+  // Llenar desplegables de categoría y bodega con los valores existentes
+  const prods = getProductos();
+  const cats = [...new Set(prods.map(p => p.cat).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es'));
+  const bodegas = [...new Set(prods.map(p => p.ubic).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es'));
+  const selCat = document.getElementById('filtro-prod-cat');
+  const selBod = document.getElementById('filtro-prod-bodega');
+  const catVal = selCat.value, bodVal = selBod.value;
+  selCat.innerHTML = '<option value="">Todas las categorías</option>' +
+    cats.map(c => `<option value="${c}" ${c===catVal?'selected':''}>${c}</option>`).join('');
+  selBod.innerHTML = '<option value="">Todas las bodegas</option>' +
+    bodegas.map(b => `<option value="${b}" ${b===bodVal?'selected':''}>${b}</option>`).join('');
+  filtrarProductos();
+}
+
+function filtrarProductos() {
+  const ql = (document.getElementById('search-prod-mant')?.value || '').toLowerCase();
+  const fCat = document.getElementById('filtro-prod-cat')?.value || '';
+  const fBod = document.getElementById('filtro-prod-bodega')?.value || '';
+  const prods = getProductos().filter(p => {
+    const matchTexto = !ql ||
+      p.nombre.toLowerCase().includes(ql) ||
+      (p.cat||'').toLowerCase().includes(ql) ||
+      (p.descripcion||'').toLowerCase().includes(ql);
+    const matchCat = !fCat || p.cat === fCat;
+    const matchBod = !fBod || p.ubic === fBod;
+    return matchTexto && matchCat && matchBod;
+  });
 
   document.getElementById('tabla-productos-mant').innerHTML = prods.length
     ? prods.map((p,i) => {
@@ -3000,6 +3069,7 @@ function filtrarProductos(q) {
           <td class="mono" style="font-size:11px;color:var(--text3)">${p.sku||p.id}</td>
           <td><strong>${p.nombre}</strong></td>
           <td><span class="badge badge-info">${p.cat||'—'}</span></td>
+          <td style="font-size:12px;color:var(--text2)">${p.ubic||'—'}</td>
           <td style="font-size:12px;color:var(--text2)">${p.unidad||'—'}</td>
           <td style="font-size:12px;color:var(--text2)">${p.peso||'—'}</td>
           <td style="font-size:12px;color:var(--text2);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${p.descripcion||''}">${p.descripcion||'—'}</td>
@@ -3011,7 +3081,7 @@ function filtrarProductos(q) {
           </td>
         </tr>`;
       }).join('')
-    : `<tr><td colspan="9" style="text-align:center;color:var(--text3);padding:24px">Sin productos registrados</td></tr>`;
+    : `<tr><td colspan="10" style="text-align:center;color:var(--text3);padding:24px">Sin productos que coincidan con los filtros</td></tr>`;
 }
 
 function abrirModalProductoMant() {
@@ -3100,7 +3170,7 @@ async function guardarProductoMant() {
     }
     setProductos(prods);
     cerrarModal('modal-producto-mant');
-    filtrarProductos(document.getElementById('search-prod-mant')?.value||'');
+    renderProductos();
   } catch(e) {
     errEl.textContent = 'Error al guardar en la nube: ' + e.message;
     errEl.style.display = 'block';
@@ -3116,7 +3186,7 @@ async function eliminarProductoMant(id) {
       await deleteProductoSupa(p._dbid);
     }
     setProductos(getProductos().filter(x=>x.id!==id));
-    filtrarProductos(document.getElementById('search-prod-mant')?.value||'');
+    renderProductos();
     showToast('Producto eliminado');
   } catch(e) {
     showToast('Error al eliminar: ' + e.message, 'err');
